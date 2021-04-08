@@ -11,7 +11,8 @@ import (
 // DETERMINE IF A TCP STREAM IS A SCAN
 func isScanStream( stream *TCPStream) bool {
 
-	if stream.HasSYN && !stream.HasACK && stream.HasRST {
+	// LOOK FOR MALFORMED TCP CONNECTION SETUP AND TEARDOWN
+	if !stream.HasSYN || !stream.HasSYNACK || !stream.HasACK ||!stream.HasFIN {
 		return true
 	}
 
@@ -67,6 +68,14 @@ func identifyTargets(tcpStreams *map[gopacket.Flow]*TCPStream) (attackingHosts S
 
 		// IDENTIFY LIKELY SCAN STREAMS
 		stream := (*tcpStreams)[flow]
+		if stream.DstHost == "142.250.113.113" && stream.SrcPort == "34384" {
+			for i := range stream.Packets {
+
+				packet := stream.Packets[i].TransportLayer().(*layers.TCP)
+
+				fmt.Printf("<%s -> %s> SYN: %t, ACK: %t, FIN: %T, RST: %T\n", packet.SrcPort, packet.DstPort, packet.SYN, packet.ACK, packet.FIN, packet.RST)
+			}
+		}
 		if isScanStream(stream) {
 			attackingHosts.Add(stream.SrcHost)
 			victimHosts.Add(stream.DstHost)
@@ -94,9 +103,12 @@ func Analyze(pathToPcap string) error {
 	if handle, err := pcap.OpenOffline(pathToPcap); err != nil {
 		return err
 	} else {
+
+		// FILTER FOR TCP PACKETS
 		if err = handle.SetBPFFilter("tcp"); err != nil {
 			return err
 		}
+
 		// LOOP ACROSS PACKETS
 		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
