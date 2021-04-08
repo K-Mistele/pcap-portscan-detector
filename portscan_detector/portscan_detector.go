@@ -158,6 +158,9 @@ func Analyze(pathToPcap string) error {
 		fmt.Printf("Victim Ports: %v\n", victimPorts.Items())
 		fmt.Printf("Victim Port map: %v\n", victimPortMap)
 
+		// TODO: IDENTIFY ATTACKS BY ID A HOST IS THE SOURCE OF CONNECTIONS TO > 10 DIFFERENT PORT NUMBERS IN A SHORT AMOUNT OF TIME
+		// TODO: PRINT OUTPUT IN A PRETTY FORMAT
+
 	}
 
 	return nil

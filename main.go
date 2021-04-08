@@ -68,6 +68,8 @@ func main() {
 			fmt.Printf("Invalid selection: %s\n", err)
 			continue
 		}
+
+		// DO THE ANALYSIS
 		 err = portscan_detector.Analyze(filename)
 		 if err != nil {
 		 	fmt.Println(err)
