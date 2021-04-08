@@ -6,13 +6,25 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	. "github.com/k-mistele/pcap_portscan_detector/set"
+	"strings"
 )
 
 // DETERMINE IF A TCP STREAM IS A SCAN
 func isScanStream( stream *TCPStream) bool {
 
+	// IF HTTP/S IS THE SOURCE, PROBABLY NOT A PORT SCAN SINCE THAT'D COME FROM AN EPHEMERAL QUIRK.
+	// THIS TRIES TO AVOID A QUIRK WITH THE PROTOCOL
+	if strings.Contains(stream.SrcPort, "http"){
+		return false
+	}
+
 	// LOOK FOR MALFORMED TCP CONNECTION SETUP AND TEARDOWN
-	if !stream.HasSYN || !stream.HasSYNACK || !stream.HasACK ||!stream.HasFIN {
+	if !stream.HasSYN  || !stream.HasACK ||!stream.HasFIN {
+		return true
+	}
+
+	// LOOK FOR SHORT STREAMS WITH AN RST INDICATING AN ERROR
+	if stream.Length < 5 && stream.HasRST {
 		return true
 	}
 
@@ -68,18 +80,19 @@ func identifyTargets(tcpStreams *map[gopacket.Flow]*TCPStream) (attackingHosts S
 
 		// IDENTIFY LIKELY SCAN STREAMS
 		stream := (*tcpStreams)[flow]
-		if stream.DstHost == "142.250.113.113" && stream.SrcPort == "34384" {
-			for i := range stream.Packets {
-
-				packet := stream.Packets[i].TransportLayer().(*layers.TCP)
-
-				fmt.Printf("<%s -> %s> SYN: %t, ACK: %t, FIN: %T, RST: %T\n", packet.SrcPort, packet.DstPort, packet.SYN, packet.ACK, packet.FIN, packet.RST)
-			}
-		}
+		//if stream.DstHost == "142.250.113.113" && stream.SrcPort == "34384" {
+		//	for i := range stream.Packets {
+		//
+		//		tcpPacket := stream.Packets[i].TransportLayer().(*layers.TCP)
+		//
+		//		//fmt.Printf("%+v\n", tcpPacket)
+		//		//fmt.Printf("%+v\n", *stream)
+		//	}
+		//}
 		if isScanStream(stream) {
 			attackingHosts.Add(stream.SrcHost)
 			victimHosts.Add(stream.DstHost)
-			fmt.Printf("%s:%s -> %s:%s\n", stream.SrcHost, stream.SrcPort, stream.DstHost, stream.DstPort)
+			//fmt.Printf("%s:%s -> %s:%s\n", stream.SrcHost, stream.SrcPort, stream.DstHost, stream.DstPort)
 			victimPorts.Add(stream.DstPort)
 
 			_, exists := (*victimPortMap)[stream.DstHost]

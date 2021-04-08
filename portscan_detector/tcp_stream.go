@@ -32,7 +32,7 @@ func (stream TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 
 	//fmt.Println(stream.Length)
 	// LOOK FOR A CONNECTION SETUP SYN ONLY NOT A SYNACK
-	if tcpLayer.SYN && !tcpLayer.ACK{
+	if stream.Length == 1 || (tcpLayer.SYN && !tcpLayer.ACK) {
 		stream.Flow = packet.TransportLayer().TransportFlow()
 		stream.SrcHost = ipLayer.SrcIP.String()
 		stream.DstHost = ipLayer.DstIP.String()
