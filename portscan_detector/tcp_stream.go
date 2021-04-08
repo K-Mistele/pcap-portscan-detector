@@ -17,6 +17,7 @@ type TCPStream struct {
 	HasACK    bool
 	HasSYNACK bool
 	HasRST    bool
+	HasFIN 	  bool
 }
 
 func (stream TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
@@ -30,16 +31,14 @@ func (stream TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 	stream.Packets = append(stream.Packets, packet)
 
 	//fmt.Println(stream.Length)
-	if stream.Length == 1 || tcpLayer.SYN {
+	// LOOK FOR A CONNECTION SETUP SYN ONLY NOT A SYNACK
+	if tcpLayer.SYN && !tcpLayer.ACK{
 		stream.Flow = packet.TransportLayer().TransportFlow()
 		stream.SrcHost = ipLayer.SrcIP.String()
 		stream.DstHost = ipLayer.DstIP.String()
 		stream.SrcPort = tcpLayer.SrcPort.String()
 		stream.DstPort = tcpLayer.DstPort.String()
-		stream.HasACK = tcpLayer.ACK
-		stream.HasRST = tcpLayer.RST
 		stream.HasSYN = tcpLayer.SYN
-		stream.HasSYNACK = tcpLayer.SYN && tcpLayer.ACK
 	}
 
 	// CHECK FOR ACK
@@ -55,6 +54,11 @@ func (stream TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 	// CHECK FOR RST
 	if tcpLayer.RST && stream.HasRST == false {
 		stream.HasRST = true
+	}
+
+	// CHECK FOR FIN
+	if tcpLayer.FIN && stream.HasFIN == false{
+		stream.HasFIN = true
 	}
 
 	return &stream
@@ -75,5 +79,6 @@ func NewTCPStream() *TCPStream {
 		HasSYN: false,
 		HasRST: false,
 		HasACK: false,
+		HasFIN: false,
 	}
 }
