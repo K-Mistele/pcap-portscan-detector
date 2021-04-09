@@ -40,3 +40,10 @@ func (s Set) Items() []interface{} {
 func (s Set) Size() int {
 	return len(s.items)
 }
+
+// CONSTRUCTOR
+func NewSet() *Set {
+	return &Set{
+		items: make(map[interface{}] bool),
+	}
+}
