@@ -170,9 +170,6 @@ func identifyScans(tcpStreamsBySrcHost *map[string][]*TCPStream) (*[]string, *ma
 			portNo, _ = strconv.Atoi(portStr)
 			if portNo < lowestEphemeralPort {
 				portNumbers.Add(stream.DstPort)
-				fmt.Printf("Adding port %d\n", portNo)
-			} else {
-				fmt.Printf("Dropping port %d\n", portNo)
 			}
 
 		}
