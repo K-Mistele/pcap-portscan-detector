@@ -140,8 +140,27 @@ func correlateStreamsToHosts(tcpStreams *map[gopacket.Flow]*TCPStream) (*map[str
 	return &m, nil
 }
 
+// GIVEN THE ASSUMPTION THAT A *TCPStream IS ASSOCIATED WITH A SCAN, DETERMINE IF IT'S A SYN SCAN
+func isSYNScanStream(stream *TCPStream) bool {
+
+	if stream.HasSYN && !stream.HasRST {
+		return true
+	}
+
+	return false
+}
+
+// GIVEN THE ASSUMPTION THAT A *TCPStream IS ASSOCIATED WITH A SCAN, DETERMINE IF IT'S A CONNECT SCAN
+func isConnectScanStream (stream *TCPStream) bool {
+	if stream.HasRST || stream.HasFIN {
+		return true
+	}
+
+	return false
+}
+
 // IDENTIFY CONNECT SCANS
-func identifyScans(tcpStreamsBySrcHost *map[string][]*TCPStream) (*[]string, *map[string]*Set) {
+func identifyTCPScans(tcpStreamsBySrcHost *map[string][]*TCPStream) (*[]string, *map[string]*Set) {
 
 	var attackingHosts []string
 	targetHostToPortMap := make(map[string]*Set)
@@ -167,6 +186,7 @@ func identifyScans(tcpStreamsBySrcHost *map[string][]*TCPStream) (*[]string, *ma
 				portStr = stream.DstPort
 			}
 
+			// FILTER OUT EPHEMERAL PORTS - USUALLY WE CAN IGNORE THESE
 			portNo, _ = strconv.Atoi(portStr)
 			if portNo < lowestEphemeralPort {
 				portNumbers.Add(stream.DstPort)
@@ -210,6 +230,8 @@ func identifyScans(tcpStreamsBySrcHost *map[string][]*TCPStream) (*[]string, *ma
 	return &attackingHosts, &targetHostToPortMap
 }
 
+
+
 // PERFORM ANALYSIS
 func Analyze(pathToPcap string) error {
 
@@ -246,7 +268,7 @@ func Analyze(pathToPcap string) error {
 		// IDENTIFY HOSTS THAT TALK TO LOTS OF DIFFERENT PORTS
 		var attackingHosts *[]string // LIST OF SRC IPS
 		var targetHostToPortMap *map[string]*Set
-		attackingHosts, targetHostToPortMap = identifyScans(tcpStreamsBySrcHost)
+		attackingHosts, targetHostToPortMap = identifyTCPScans(tcpStreamsBySrcHost)
 
 		fmt.Printf("Attacking hosts: %v\n", attackingHosts)
 		fmt.Println("Target Host to port map: \n")
@@ -255,8 +277,7 @@ func Analyze(pathToPcap string) error {
 		}
 		// TODO: PRINT OUTPUT IN A PRETTY FORMAT
 
-		// TODO: IDENTIFY CONNECT SCAN BY MAPPING CONNS TO HOST, LOOK FOR LOTS OF RST'S, MAYBE > 5% OF CONNS
-		// TODO: IDENTIFY SYN SCANS BY MAPPING CONNS TO HOST, LOOK FOR LOTS OF SYN'S W/O HANDSHAKE AND A SHORT STREAM
+		// TODO: SEPARATE SYN AND CONNECT SCANS
 
 	}
 
