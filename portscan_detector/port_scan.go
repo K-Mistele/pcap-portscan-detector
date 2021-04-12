@@ -15,15 +15,15 @@ const (
 
 // PortScan REPRESENTS A PORT SCAN. CONTAINS A LIST OF PORTS, ETC.
 type PortScan struct {
-	AttackingHost 	string
-	TargetHost 		string
-	ScannedPorts	*Set
-	StartTime		time.Time
-	EndTime 		time.Time
-	Type			ScanType
-	packets 		[]gopacket.Packet
-	Streams			[]*TCPStream
-	Flows			[]gopacket.Flow
+	AttackingHost string
+	TargetHost    string
+	ScannedPorts  *Set
+	StartTime     time.Time
+	EndTime       time.Time
+	Type          ScanType
+	packets       []gopacket.Packet
+	streams       []*TCPStream
+	Flows         []gopacket.Flow
 }
 
 // determinePortScanType WILL CLASSIFY THE PortScan AS A SYN OR CONNECT SCAN. THIS SHOULD ONLY BE CALLED BY THE CONSTRUCTOR.
@@ -32,17 +32,11 @@ func (ps *PortScan) determinePortScanType() {
 	// NOTE: THIS IS NON-IDEMPOTENT
 	//synScanConns, connectScanConns := 0, 0
 
-	// TODO: LOOK FOR CONNECT SCAN BY LARGE VOLUME OF TCP RST PACKETS
-	for _, stream := range ps.Streams {
+	for _, stream := range ps.streams {
 
-		// EVERYTHING SHOULD HAVE A SYN
-		if stream.HasSYN {
+		// SYN + SYNACK MEANS THERE'S AN OPEN PORT.
+		if stream.HasSYN && stream.HasSYNACK {
 
-			// THIS MEANS A PORT IS OPEN
-			if stream.HasSYNACK {
-				// TODO FINISH
-
-			}
 		}
 	}
 
@@ -56,12 +50,12 @@ func NewPortScan(attackingHost string, targetHost string, streams []*TCPStream, 
 
 	// BUILD THE PortScan STRUCT
 	ps := PortScan {
-		AttackingHost: 	attackingHost,
-		TargetHost: 	targetHost,
-		Streams: 		streams,
-		ScannedPorts: 	ports,
-		packets: 		[]gopacket.Packet{},
-		Flows: 			[]gopacket.Flow{},
+		AttackingHost: attackingHost,
+		TargetHost:    targetHost,
+		streams:       streams,
+		ScannedPorts:  ports,
+		packets:       []gopacket.Packet{},
+		Flows:         []gopacket.Flow{},
 	}
 
 	// PROCESS EACH TCPStream STRUCT AND AGGREGATE THE INFO INTO THE PortScan struct
