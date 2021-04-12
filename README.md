@@ -10,5 +10,7 @@
    
 ## Running the Project
 * drop any pcap files to analyze in the `pcaps/` directory
+* enter the project directory: `cd pcap-portscan-detector`
 * Install go dependencies: `go get`
-* Run the program: `go run main.go
+* Run the program: `go run main.go`
+* Or, compile it into an executable: `go build`
