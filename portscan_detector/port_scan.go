@@ -23,6 +23,7 @@ type PortScan struct {
 	ScannedPorts  *Set
 	StartTime     time.Time
 	EndTime       time.Time
+	Duration      time.Duration
 	Type          ScanType
 	packets       []gopacket.Packet
 	streams       []*TCPStream
@@ -67,12 +68,49 @@ func (ps *PortScan) determinePortScanType() {
 		ps.Type = TCPConnectScan
 	}
 
-	fmt.Printf("Scan %s has %d SYN scan-like conns, and %d connect scan-like conns\n", ps.NetworkFlow, synScanConns, connectScanConns)
-	fmt.Printf("Classifying scan %s as %v\n", ps.NetworkFlow, ps.Type)
+	//fmt.Printf("Scan %s has %d SYN scan-like conns, and %d connect scan-like conns\n", ps.NetworkFlow, synScanConns, connectScanConns)
+	//fmt.Printf("Classifying scan %s as %v\n", ps.NetworkFlow, ps.Type)
 
 }
 
-// NewPortScan CONSTRUCTS A PortScan OBJECT FROM A LIST OF TCP STREAMS
+// determinePortScanTime WILL DETERMINE THE time.Time START AND END TIMES OF THE SCAN,
+// IT WILL ALSO DETERMINE THE time.Duration DURATION OF THE SCAN
+func (ps *PortScan) determinePortScanTime() {
+
+	// FINDING START AND END TIME OF EACH STREAM IS ACTUALLY AMORTIZED IN THE TCPStream STRUCT
+	// THEREFORE, WE ONLY NEED TO LOOK AT START AND END TIMES FOR EACH STREAM AND THEN CALCULATE A DURATION
+
+	for _, stream := range ps.streams {
+
+		// IF TIME IS UNINITIALIZED, THEN INITIALIZE IT TO THE VALUES OF THE FIRST STREAM
+		if ps.StartTime.IsZero() && ps.EndTime.IsZero() {
+			ps.StartTime = stream.StartTime
+			ps.EndTime = stream.EndTime
+		} else {
+
+			// IF EITHER STREAM START IS BEFORE THE PORT SCAN'S START, UPDATE THE PORT SCAN'S START
+			if stream.StartTime.Before(ps.StartTime) {
+				ps.StartTime = stream.StartTime
+			}
+			if stream.EndTime.Before(ps.StartTime) {
+				ps.StartTime = stream.EndTime
+			}
+
+			// IF EITHER STREAM START IS AFTER THE PORT SCAN'S END, UPDATE THE PORT SCAN'S END
+			if stream.EndTime.After(ps.EndTime) {
+				ps.EndTime = stream.EndTime
+			}
+			if stream.StartTime.After(ps.EndTime) {
+				ps.EndTime = stream.StartTime
+			}
+		}
+
+		// UPDATE THE DURATION OF THE Port Scan
+		ps.Duration = stream.EndTime.Sub(stream.StartTime)
+	}
+}
+
+// NewPortScan CONSTRUCTS A PortScan OBJECT FROM A LIST OF TCP STREAMS AND RETURNS A POINTER
 func NewPortScan(attackingHost string, targetHost string, streams []*TCPStream, ports *Set) *PortScan {
 
 	// BUILD THE PortScan STRUCT
@@ -84,6 +122,8 @@ func NewPortScan(attackingHost string, targetHost string, streams []*TCPStream, 
 		packets:       []gopacket.Packet{},
 		Flows:         []gopacket.Flow{},
 		NetworkFlow:   fmt.Sprintf("%s->%s", attackingHost, targetHost),
+		StartTime:     time.Time{},
+		EndTime:       time.Time{},
 	}
 
 	// PROCESS EACH TCPStream STRUCT AND AGGREGATE THE INFO INTO THE PortScan struct
@@ -103,6 +143,7 @@ func NewPortScan(attackingHost string, targetHost string, streams []*TCPStream, 
 	ps.determinePortScanType()
 
 	// TODO: DETERMINE START AND END TIME
+	ps.determinePortScanTime()
 
 	// RETURN THE PortScan
 	return &ps

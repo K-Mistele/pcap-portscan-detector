@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
+	"github.com/jedib0t/go-pretty/table"
 	. "github.com/k-mistele/pcap_portscan_detector/set"
+	"os"
+	"strings"
 )
 
 // reasonableDifferentPortThreshold DEFINES THE GREATEST NUMBER OF DIFFERENT TCP PORTS A HOST MIGHT REASONABLE
@@ -13,7 +16,7 @@ import (
 const reasonableDifferentPortThreshold = 10
 
 // buildTransportStreams BUILDS A LIST OF BIDIRECTIONAL TRANSPORT STREAMS
-func buildTransportStreams (packetSource *gopacket.PacketSource) (*[]*TCPStream, error) {
+func buildTransportStreams(packetSource *gopacket.PacketSource) (*[]*TCPStream, error) {
 
 	var streams []*TCPStream
 	var numPackets = 0
@@ -52,10 +55,10 @@ func buildTransportStreams (packetSource *gopacket.PacketSource) (*[]*TCPStream,
 }
 
 // correlateTransportStreamsToNetworkSource BUILDS A MAP OF IP ADDRESSES TOA LIST OF TCP STREAMS
-func correlateTransportStreamsToNetworkSource (tcpStreams *[]*TCPStream) (*map[string] []*TCPStream, error) {
+func correlateTransportStreamsToNetworkSource(tcpStreams *[]*TCPStream) (*map[string][]*TCPStream, error) {
 
 	// CREATE MAP TO CORRELATE ORIGINATING IP TO STREAMS
-	m := make(map[string] []*TCPStream)
+	m := make(map[string][]*TCPStream)
 
 	// LOOP ACROSS STREAMS AND ASSIGN THEM TO THE MAP
 	for _, stream := range *tcpStreams {
@@ -73,10 +76,10 @@ func correlateTransportStreamsToNetworkSource (tcpStreams *[]*TCPStream) (*map[s
 }
 
 // identifyPortScans BUILDS A LIST OF PORT SCANS
-func identifyPortScans(sourceHostToStreams *map[string] []*TCPStream) (*[]string, *map[string] *Set){
+func identifyPortScans(sourceHostToStreams *map[string][]*TCPStream) (*[]string, *map[string]*Set) {
 
 	var attackingHosts []string
-	targetHostToPortMap := make(map[string] *Set)
+	targetHostToPortMap := make(map[string]*Set)
 
 	// IDENTIFY ATTACKS BY ID A HOST IS THE SOURCE OF CONNECTIONS TO > 10 DIFFERENT PORT NUMBERS IN A SHORT AMOUNT OF TIME
 	// LOOP ACROSS STREAMS BY SRC HOST
@@ -132,8 +135,6 @@ func identifyPortScans(sourceHostToStreams *map[string] []*TCPStream) (*[]string
 			}
 		}
 
-
-
 	}
 	return &attackingHosts, &targetHostToPortMap
 }
@@ -181,44 +182,118 @@ func buildPortScans(attackingHosts *[]string, streams *[]*TCPStream, targetHostT
 	return &portScans
 }
 
+// printScanData WILL PRETTY-PRINT THE RESULTS OF THE SCAN DATA
+func printScanData(portScans *[]*PortScan) {
+
+	// START TO BUILD A table.Table
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.SetTitle("TCP Port Scans")
+	t.AppendHeader(table.Row{"#", "Source", "Target", "Type"})
+	for idx, scan := range *portScans {
+		row := []interface{}{idx + 1, scan.AttackingHost, scan.TargetHost, string(scan.Type)}
+		t.AppendRow(row)
+	}
+	t.Render()
+}
+
+// printVerboseScanData WILL PRETTY-PRINT THE VERBOSE INFORMATION ON A SCAN
+func printVerboseScanData(scan *PortScan) {
+	// BUILD A TABLE
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.SetTitle("Port Scan Data for %s", scan.NetworkFlow)
+	t.AppendHeader([]interface{}{"Field", "Value"})
+	t.AppendRow([]interface{}{"Scanning Host", scan.AttackingHost})
+	t.AppendRow([]interface{}{"Target Host", scan.TargetHost})
+	t.AppendRow([]interface{}{"Scan Type", scan.Type})
+	t.AppendRow([]interface{}{"Start Time", scan.StartTime.String()})
+	t.AppendRow([]interface{}{"End Time", scan.EndTime.String()})
+	t.AppendRow([]interface{}{"Elapsed Time", scan.Duration.String()})
+	t.AppendRow([]interface{}{"# of Ports Scanned", scan.ScannedPorts.Size()})
+	t.Render()
+
+}
+
 // Analyze IS A REFACTOR OF ANALYZE, WIP
 func Analyze(pathToPcap string) error {
+
+	fmt.Println("Beginning analysis! (this may take a while depending on the size of your file)...")
 
 	handle, err := pcap.OpenOffline(pathToPcap)
 	if err != nil {
 		return err
 	}
-	if err = handle.SetBPFFilter("tcp"); err != nil {return err}
+	if err = handle.SetBPFFilter("tcp"); err != nil {
+		return err
+	}
 
 	// LOOP ACROSS PACKETS
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
 	// BUILD TRANSPORT LAYER CONNECTIONS
+	fmt.Println("Reassembling TCP Streams...")
 	transportStreams, err := buildTransportStreams(packetSource)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	fmt.Printf("Identified %d transport streams!\n", len(*transportStreams))
 	synacks := 0
 	for _, stream := range *transportStreams {
-		if stream.HasSYNACK { synacks++}
+		if stream.HasSYNACK {
+			synacks++
+		}
 	}
-	fmt.Printf("%d streams have SYN-ACKS!\n", synacks)
+
+	//fmt.Printf("%d streams have SYN + SYN/ACKS, indicating open ports!\n", synacks)
+	fmt.Println("TCP Streams reassembled! Correlating TCP streams to origin host...")
 
 	// CORRELATE THESE STREAMS TO A LIST OF ORIGINATING HOSTS
 	transportStreamBySourceHost, err := correlateTransportStreamsToNetworkSource(transportStreams)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
+	fmt.Println("TCP streams correlated! Identifying port scans...")
 
 	// IDENTIFY HOSTS THAT TALK TO LOTS OF DIFFERENT PORTS
 	attackingHosts, targetHostToPortMaps := identifyPortScans(transportStreamBySourceHost)
-
-	fmt.Printf("Attacking hosts: %v\n", attackingHosts)
-	fmt.Println("Target Host to port map:")
-	for targetHost := range *targetHostToPortMaps {
-		fmt.Printf("%s: %+v\n", targetHost, (*targetHostToPortMaps)[targetHost].Items())
-	}
+	fmt.Println("Port scans identified! Aggregating scan data...")
 
 	// BUILD PORT SCANS
 	portScans := buildPortScans(attackingHosts, transportStreams, targetHostToPortMaps)
-	fmt.Printf("%+v\n", portScans)
+	fmt.Printf("Scan data aggregated!\n\n")
+	// DO THE ACTUAL PRINTING
+	printScanData(portScans)
+
+	// PROMPT FOR FURTHER ANALYSIS
+	var selection int
+	var shouldContinue string
+
+	fmt.Print("Would you like to analyze any scans in depth? (y/n) ")
+	_, _ = fmt.Scanf("%s", &shouldContinue)
+	for strings.ToLower(shouldContinue) == "y" {
+
+		// GET THE NUMBER OF THE PORT SCAN TO ANALYZE
+		fmt.Print("Enter the number of a port scan to view details: ")
+		_, _ = fmt.Scanf("%d", &selection)
+		fmt.Println()
+
+		// GRAB THE SCAN AND PRINT VERBOSE INFORMATION
+		scan := (*portScans)[selection-1]
+		printVerboseScanData(scan)
+
+		// PROMPT TO PRINT PORTS
+		fmt.Print("Print all scanned ports? (y/n) ")
+		var shouldPrintScannedPorts string
+		_, _ = fmt.Scanf("%s", &shouldPrintScannedPorts)
+		if strings.ToLower(shouldPrintScannedPorts) == "y" {
+			fmt.Println(scan.ScannedPorts.Items())
+		}
+
+		// PROMPT TO CONTINUE
+		fmt.Printf("Would you like to analyze another scan? (y/n) ")
+		_, _ = fmt.Scanf("%s", &shouldContinue)
+	}
 
 	return nil
 }

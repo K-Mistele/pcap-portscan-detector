@@ -25,3 +25,25 @@ func mapKeys(m *map[string] *Set) *[]string {
 
 	return &keys
 }
+
+func formatPortList(s *Set) *string {
+
+	// GET LIST OF INTERFACE FROM THE SET
+	items := s.Items()
+
+	// CONVERT TO A LIST OF STRINGS, O(N)
+	portStrs := make([]string, len(items))
+	for i := range items {
+		portStrs[i] = items[i].(string)
+	}
+
+	str := ""
+
+	// BUILD A STRING
+	for i := range items {
+		str += (items[i]).(string) + " "
+	}
+
+	return &str
+	
+}
