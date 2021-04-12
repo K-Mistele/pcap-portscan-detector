@@ -70,7 +70,7 @@ func main() {
 		}
 
 		// DO THE ANALYSIS
-		 err = portscan_detector.Analyze2(filename)
+		 err = portscan_detector.Analyze(filename)
 		 if err != nil {
 		 	fmt.Println(err)
 		 }
