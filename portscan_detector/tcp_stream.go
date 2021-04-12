@@ -19,6 +19,7 @@ type TCPStream struct {
 	HasSYNACK bool
 	HasRST    bool
 	HasFIN 	  bool
+	HasRSTACK bool
 }
 
 func (stream *TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
@@ -48,15 +49,20 @@ func (stream *TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 		stream.HasSYNACK = true
 	}
 
-	// CHECK FOR NON-SYNACK ACK
+	// CHECK FOR NON-SYN/ACK ACK
 	if tcpLayer.ACK && !tcpLayer.SYN && stream.HasACK == false {
 		stream.HasACK = true
 	}
 
 
-	// CHECK FOR RST
-	if tcpLayer.RST && stream.HasRST == false {
+	// CHECK FOR NON-RST/ACK RST
+	if tcpLayer.RST && !tcpLayer.ACK && stream.HasRST == false {
 		stream.HasRST = true
+	}
+
+	// CHECK FOR RST/ACK
+	if tcpLayer.RST && tcpLayer.ACK && stream.HasRSTACK == false {
+		stream.HasRSTACK = true
 	}
 
 	// CHECK FOR FIN
