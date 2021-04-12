@@ -6,58 +6,45 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	. "github.com/k-mistele/pcap_portscan_detector/set"
-	"strings"
 	"strconv"
+	"strings"
 )
 
 const reasonableDifferentPortThreshhold = 10
 const lowestEphemeralPort = 32768 // IANA SUGGESTS 49152, BUT LOTS OF LINUX KERNELS USE 32768
 
-// DETERMINE IF A TCP STREAM IS A SCAN
-func isScanStream(stream *TCPStream) bool {
-
-	// IF HTTP/S IS THE SOURCE, PROBABLY NOT A PORT SCAN SINCE THAT'D COME FROM AN EPHEMERAL QUIRK.
-	// THIS TRIES TO AVOID A QUIRK WITH THE PROTOCOL
-	if strings.Contains(stream.SrcPort, "http") {
-		return false
-	}
-
-	// LOOK FOR MALFORMED TCP CONNECTION SETUP AND TEARDOWN
-	if !stream.HasSYN || !stream.HasACK || !stream.HasFIN {
-		return true
-	}
-
-	// LOOK FOR SHORT STREAMS WITH AN RST INDICATING AN ERROR
-	if stream.Length < 5 && stream.HasRST {
-		return true
-	}
-
-	return false
-
-}
 
 // BUILD OUT A MAP OF TCP FLOWS
-func buildTCPStreams(packetSource *gopacket.PacketSource) (*map[gopacket.Flow]*TCPStream, error) {
+func buildTCPStreams(packetSource *gopacket.PacketSource) (*map[CrossLayerFlow]*TCPStream, *[]*TCPStream, error) {
 
-	tcpStreams := make(map[gopacket.Flow]*TCPStream)
+	tcpStreams := make(map[CrossLayerFlow]*TCPStream)
+	allStreams := []*TCPStream{}
 
-	// SORT EACH gopacket.Packet INTO A map[gopacket.Flow] []gopacket.Packet
+	// SORT EACH gopacket.Packet INTO A map[gopacket.TransportFlow] []gopacket.Packet
 	numPackets := 0
 	for packet := range packetSource.Packets() {
 
 		if packet == nil {
-			return &tcpStreams, nil
+			return &tcpStreams, nil, nil
 		}
 
-		// GET TRANSPORT LAYER DATA
+		// GET TRANSPORT AND NETWORK LAYER DATA, BUILD A CROSS LAYER FLOW
 		tcp := packet.TransportLayer().(*layers.TCP)
-		flow := tcp.TransportFlow()
-		_, exists := tcpStreams[tcp.TransportFlow()]
+		ip := packet.NetworkLayer().(*layers.IPv4)
+		crossLayerFlow := NewCrossLayerFlow(ip.SrcIP.String(), tcp.SrcPort.String(), ip.DstIP.String(), tcp.DstPort.String())
+
+		// CHECK IF WE HAVE A FLOW IDENTIFIED BY THAT CROSS LAYER FLOW
+		_, exists := tcpStreams[*crossLayerFlow]
+
+		// IF YES, ADD THE PACKET TO THE FLOW
 		if exists {
-			tcpStreams[flow] = tcpStreams[flow].AddPacket(packet)
+			tcpStreams[*crossLayerFlow] = tcpStreams[*crossLayerFlow].AddPacket(packet)
+
 		} else {
-			tcpStreams[flow] = NewTCPStream()
-			tcpStreams[flow] = tcpStreams[flow].AddPacket(packet)
+
+			// IF NOT, CREATE THE FLOW AND THEN ADD THE PACKET
+			tcpStreams[*crossLayerFlow] = NewTCPStream()
+			tcpStreams[*crossLayerFlow] = tcpStreams[*crossLayerFlow].AddPacket(packet)
 		}
 		//fmt.Println(tcpStreams[tcp.TransportFlow()].Length)
 
@@ -65,56 +52,21 @@ func buildTCPStreams(packetSource *gopacket.PacketSource) (*map[gopacket.Flow]*T
 
 	}
 
+	// ADD THEM ALL TO THE LIST OF RAW STREAMS
+	for key := range tcpStreams {
+		allStreams = append(allStreams, tcpStreams[key])
+	}
+
 	flowLengths := []int{}
 	for flow := range tcpStreams {
 		flowLengths = append(flowLengths, (tcpStreams)[flow].Length)
 	}
 	fmt.Printf("Counted %d packets\n", numPackets)
-	return &tcpStreams, nil
-}
-
-// IDENTIFY ATTACKER AND VICTIM HOSTS AND PORTS
-func identifyTargets(tcpStreams *map[gopacket.Flow]*TCPStream) (attackingHosts Set, victimHosts Set, victimPorts Set, victimPortMap *map[string][]string) {
-
-	m := make(map[string][]string)
-	victimPortMap = &m
-
-	// LOOP ACROSS TCP STREAMS
-	for flow := range *tcpStreams {
-
-		// IDENTIFY LIKELY SCAN STREAMS
-		stream := (*tcpStreams)[flow]
-		//if stream.DstHost == "142.250.113.113" && stream.SrcPort == "34384" {
-		//	for i := range stream.Packets {
-		//
-		//		tcpPacket := stream.Packets[i].TransportLayer().(*layers.TCP)
-		//
-		//		//fmt.Printf("%+v\n", tcpPacket)
-		//		//fmt.Printf("%+v\n", *stream)
-		//	}
-		//}
-		if isScanStream(stream) {
-			attackingHosts.Add(stream.SrcHost)
-			victimHosts.Add(stream.DstHost)
-			//fmt.Printf("%s:%s -> %s:%s\n", stream.SrcHost, stream.SrcPort, stream.DstHost, stream.DstPort)
-			victimPorts.Add(stream.DstPort)
-
-			_, exists := (*victimPortMap)[stream.DstHost]
-			if exists {
-				(*victimPortMap)[stream.DstHost] = append((*victimPortMap)[stream.DstHost], stream.DstPort)
-			} else {
-				(*victimPortMap)[stream.DstHost] = []string{}
-				(*victimPortMap)[stream.DstHost] = append((*victimPortMap)[stream.DstHost], stream.DstPort)
-			}
-		}
-
-	}
-
-	return
+	return &tcpStreams, &allStreams, nil
 }
 
 // CORRELATE EACH HOST WITH A LIST OF TCP STREAMS THAT IT IS THE SOURCE OF
-func correlateStreamsToHosts(tcpStreams *map[gopacket.Flow]*TCPStream) (*map[string][]*TCPStream, error) {
+func correlateStreamsToNetworkSource(tcpStreams *map[CrossLayerFlow]*TCPStream) (*map[string][]*TCPStream, error) {
 
 	// CREATE MAP TO CORRELATE ORIGINATING IP TO STREAMS
 	m := make(map[string][]*TCPStream)
@@ -140,26 +92,7 @@ func correlateStreamsToHosts(tcpStreams *map[gopacket.Flow]*TCPStream) (*map[str
 	return &m, nil
 }
 
-// GIVEN THE ASSUMPTION THAT A *TCPStream IS ASSOCIATED WITH A SCAN, DETERMINE IF IT'S A SYN SCAN
-func isSYNScanStream(stream *TCPStream) bool {
-
-	if stream.HasSYN && !stream.HasRST {
-		return true
-	}
-
-	return false
-}
-
-// GIVEN THE ASSUMPTION THAT A *TCPStream IS ASSOCIATED WITH A SCAN, DETERMINE IF IT'S A CONNECT SCAN
-func isConnectScanStream (stream *TCPStream) bool {
-	if stream.HasRST || stream.HasFIN {
-		return true
-	}
-
-	return false
-}
-
-// IDENTIFY CONNECT SCANS
+// IDENTIFY TCP SCANS STREAM GROUPS
 func identifyTCPScans(tcpStreamsBySrcHost *map[string][]*TCPStream) (*[]string, *map[string]*Set) {
 
 	var attackingHosts []string
@@ -199,7 +132,7 @@ func identifyTCPScans(tcpStreamsBySrcHost *map[string][]*TCPStream) (*[]string, 
 
 			// MARK IT AS AN ATTACKER
 			attackingHosts = append(attackingHosts, srcHost)
-			fmt.Printf("%s scanned the following Ports: %v\n", srcHost, portNumbers.Items())
+			fmt.Printf("%s scanned the following Ports (%d): %v\n", srcHost, portNumbers.Size(), portNumbers.Items())
 
 			// TODO: THIS ASSUMES ALL OF AN ATTACKER'S STREAMS ARE SCANS, WHICH IS PROBABLY NOT THE CASE.
 			// TODO: FILTER OUT NON-ATTACK STREAMS
@@ -230,9 +163,50 @@ func identifyTCPScans(tcpStreamsBySrcHost *map[string][]*TCPStream) (*[]string, 
 	return &attackingHosts, &targetHostToPortMap
 }
 
+// BUILD OUT PORT SCANS
+func buildPortScans(attackingHosts *[]string, streams *[]*TCPStream, targetHostToPortMap *map[string]*Set) *[]*PortScan {
 
+	var portScans []*PortScan
+	var networkFlows map[string]map[string][]*TCPStream // MAP SOURCE IP TO DESTINATION IP TO STREAMS
 
-// PERFORM ANALYSIS
+	// BUILD OUT THE NETWORK MAP
+	networkFlows = make(map[string]map[string][]*TCPStream)
+	for _, attackingHost := range *attackingHosts {
+		networkFlows[attackingHost] = make(map[string][]*TCPStream)
+	}
+
+	// GET A SLICE OF VICTIM HOSTS
+	victimHosts := mapKeys(targetHostToPortMap)
+
+	// SEPARATE STREAMS INTO NETWORK LAYER FLOWS
+	for _, stream := range *streams {
+
+		// ONLY DO THIS FOR USEFUL STREAMS
+		if contains(*attackingHosts, stream.SrcHost) && contains(*victimHosts, stream.DstHost) {
+			networkFlows[stream.SrcHost][stream.DstHost] = append(networkFlows[stream.SrcHost][stream.DstHost], stream)
+		}
+
+	}
+
+	// NOW WE HAVE END TO END NETWORK MAPPINGS SO WE CAN PROCESS THE SCAN
+	for attackingHost := range networkFlows {
+
+		for targetHost := range networkFlows[attackingHost] {
+			//fmt.Printf("TransportFlow %s->%s\n", attackingHost, targetHost)
+
+			// BUILD THE PortScan
+			ps := NewPortScan(attackingHost, targetHost, networkFlows[attackingHost][targetHost], (*targetHostToPortMap)[targetHost])
+
+			// ADD THE PortScan TO THE LIST OF PortScans
+			portScans = append(portScans, ps)
+		}
+
+	}
+
+	return &portScans
+}
+
+// Analyze A NETWORK CAPTURE FILE
 func Analyze(pathToPcap string) error {
 
 	// OPEN THE PCAP FILE
@@ -248,19 +222,20 @@ func Analyze(pathToPcap string) error {
 		// LOOP ACROSS PACKETS
 		packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 
-		// BUILD FLOWS
-		tcpStreams, err := buildTCPStreams(packetSource)
+		// BUILD TRANSPORT LAYER CONNECTIONS
+		tcpStreams, allStreams, err := buildTCPStreams(packetSource)
 		if err != nil {
 			return err
 		}
 
+		// BUILD LIST OF TRANSPORT LAYER CONNECTION LENGTHS
 		var flowLengths []int
 		for stream := range *tcpStreams {
 			flowLengths = append(flowLengths, (*tcpStreams)[stream].Length)
 		}
 
 		// CORRELATE TCP STREAMS TO THE ORIGINATING HOST
-		tcpStreamsBySrcHost, err := correlateStreamsToHosts(tcpStreams)
+		tcpStreamsBySrcHost, err := correlateStreamsToNetworkSource(tcpStreams)
 		if err != nil {
 			return err
 		}
@@ -271,15 +246,188 @@ func Analyze(pathToPcap string) error {
 		attackingHosts, targetHostToPortMap = identifyTCPScans(tcpStreamsBySrcHost)
 
 		fmt.Printf("Attacking hosts: %v\n", attackingHosts)
-		fmt.Println("Target Host to port map: \n")
+		fmt.Println("Target Host to port map:")
 		for targetHost := range *targetHostToPortMap {
 			fmt.Printf("%s: %+v\n", targetHost, (*targetHostToPortMap)[targetHost].Items())
 		}
+
+		// BUILD OUT STREAMS AND OTHER DATA INTO PortScan OBJECTS FOR CLASSIFICATION
+		portScans := buildPortScans(attackingHosts, allStreams, targetHostToPortMap)
+		fmt.Printf("Detected %d port scans: \n", len(*portScans))
+
 		// TODO: PRINT OUTPUT IN A PRETTY FORMAT
 
 		// TODO: SEPARATE SYN AND CONNECT SCANS
 
 	}
+
+	return nil
+}
+
+// buildTransportStreams BUILDS A LIST OF BIDIRECTIONAL TRANSPORT STREAMS
+func buildTransportStreams (packetSource *gopacket.PacketSource) (*[]*TCPStream, error) {
+
+	var streams []*TCPStream
+	var numPackets = 0
+
+	// LOOP ACROSS ALL PACKETS IN THE PCAP SOURCE
+	for packet := range packetSource.Packets() {
+
+		// END CONDITION
+		if packet == nil {
+			return &streams, nil
+		}
+
+		// CHECK IF THE PACKET BELONGS TO AN EXISTING STREAM
+		foundStreamForPacket := false
+		for _, stream := range streams {
+
+			// IF YES, ADD THE PACKET TO THE STREAM AND BREAK OUT OF THE FOR LOOP
+			if stream.OwnsPacket(packet) {
+				stream.AddPacket(packet)
+				foundStreamForPacket = true
+				break
+			}
+		}
+
+		// IF STREAM NOT FOUND, MAKE A NEW ONE AND ADD IT TO THE LIST
+		if !foundStreamForPacket {
+			s := NewTCPStream()
+			s.AddPacket(packet)
+			streams = append(streams, s)
+		}
+
+		numPackets++
+	}
+
+	return &streams, nil
+}
+
+// correlateTransportStreamsToNetworkSource BUILDS A MAP OF IP ADDRESSES TOA LIST OF TCP STREAMS
+func correlateTransportStreamsToNetworkSource (tcpStreams *[]*TCPStream) (*map[string] []*TCPStream, error) {
+
+	// CREATE MAP TO CORRELATE ORIGINATING IP TO STREAMS
+	m := make(map[string] []*TCPStream)
+
+	// LOOP ACROSS STREAMS AND ASSIGN THEM TO THE MAP
+	for _, stream := range *tcpStreams {
+
+		// CHECK IF THERE'S ALREADY A MAP ENTRY
+		_, exists := m[stream.SrcHost]
+		if exists {
+			m[stream.SrcHost] = append(m[stream.SrcHost], stream)
+		} else {
+			m[stream.SrcHost] = []*TCPStream{stream}
+		}
+
+	}
+	return &m, nil
+}
+
+// identifyPortScans BUILDS A LIST OF PORT SCANS
+func identifyPortScans(sourceHostToStreams *map[string] []*TCPStream) (*[]string, *map[string] *Set){
+
+	var attackingHosts []string
+	targetHostToPortMap := make(map[string] *Set)
+
+	// IDENTIFY ATTACKS BY ID A HOST IS THE SOURCE OF CONNECTIONS TO > 10 DIFFERENT PORT NUMBERS IN A SHORT AMOUNT OF TIME
+	// LOOP ACROSS STREAMS BY SRC HOST
+	for srcHost := range *sourceHostToStreams {
+		streams := (*sourceHostToStreams)[srcHost]
+
+		// BUILD A SET OF PORTNUMBERS THAT EACH HOST CONNECTED TO
+		portNumbers := NewSet()
+		for _, stream := range streams {
+
+			// PARSE THE STRING INTO AN INT, CUTTING OFF THE GUESS AND PORT/APP NAME IF PRESENT
+			//var portStr string
+			//var portNo int
+			//if strings.Contains(stream.DstPort, "(") {
+			//	portStr = strings.Split(stream.DstPort, "(")[0]
+			//} else {
+			//	portStr = stream.DstPort
+			//}
+			//
+			//// FILTER OUT EPHEMERAL PORTS - USUALLY WE CAN IGNORE THESE
+			//portNo, _ = strconv.Atoi(portStr)
+			//if portNo < lowestEphemeralPort {
+			//	portNumbers.Add(stream.DstPort)
+			//}
+			portNumbers.Add(stream.DstPort)
+		}
+
+		if portNumbers.Size() >= reasonableDifferentPortThreshhold {
+			// IF THE SIZE IS LESS THAN 10, IT'S PROBABLY A PORT SCAN
+			attackingHosts = append(attackingHosts, srcHost)
+
+			// TODO: THIS ASSUMES ALL OF AN ATTACKER'S STREAMS ARE SCANS, WHICH IS PROBABLY NOT THE CASE.
+			// TODO: FILTER OUT NON-ATTACK STREAMS
+			// MAP THE TARGET HOSTS AND PORTS TOGETHER
+			for _, stream := range streams {
+
+				// ONLY GET CONNECT SCAN STREAMS
+				_, exists := targetHostToPortMap[stream.DstHost]
+				if exists {
+					targetHostToPortMap[stream.DstHost].Add(stream.DstPort)
+				} else {
+					targetHostToPortMap[stream.DstHost] = NewSet()
+					targetHostToPortMap[stream.DstHost].Add(stream.DstPort)
+				}
+
+			}
+
+			// REMOVE TARGETS WITH < 10 PORTS IN SCAN SINCE IT'S LIKELY JUST A CONN ERROR
+			for dstHost := range targetHostToPortMap {
+				if targetHostToPortMap[dstHost].Size() < 10 {
+					delete(targetHostToPortMap, dstHost)
+				}
+			}
+		}
+
+
+
+	}
+	return &attackingHosts, &targetHostToPortMap
+}
+
+// Analyze2 IS A REFACTOR OF ANALYZE, WIP
+func Analyze2 (pathToPcap string) error {
+
+	handle, err := pcap.OpenOffline(pathToPcap)
+	if err != nil {
+		return err
+	}
+	if err = handle.SetBPFFilter("tcp"); err != nil {return err}
+
+	// LOOP ACROSS PACKETS
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+
+	// BUILD TRANSPORT LAYER CONNECTIONS
+	transportStreams, err := buildTransportStreams(packetSource)
+	if err != nil { return err }
+	fmt.Printf("Identified %d transport streams!\n", len(*transportStreams))
+	synacks := 0
+	for _, stream := range *transportStreams {
+		if stream.HasSYNACK { synacks++}
+	}
+	fmt.Printf("%d streams have SYN-ACKS!\n", synacks)
+
+	// CORRELATE THESE STREAMS TO A LIST OF ORIGINATING HOSTS
+	transportStreamBySourceHost, err := correlateTransportStreamsToNetworkSource(transportStreams)
+	if err != nil { return err }
+
+	// IDENTIFY HOSTS THAT TALK TO LOTS OF DIFFERENT PORTS
+	attackingHosts, targetHostToPortMaps := identifyPortScans(transportStreamBySourceHost)
+
+	fmt.Printf("Attacking hosts: %v\n", attackingHosts)
+	fmt.Println("Target Host to port map:")
+	for targetHost := range *targetHostToPortMaps {
+		fmt.Printf("%s: %+v\n", targetHost, (*targetHostToPortMaps)[targetHost].Items())
+	}
+
+	// BUILD PORT SCANS
+	portScans := buildPortScans(attackingHosts, transportStreams, targetHostToPortMaps)
+	fmt.Printf("%+v\n", portScans)
 
 	return nil
 }

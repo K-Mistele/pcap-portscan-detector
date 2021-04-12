@@ -6,9 +6,10 @@ import (
 )
 
 type TCPStream struct {
-	Length    int
-	Packets   []gopacket.Packet
-	Flow      gopacket.Flow
+	Length        int
+	Packets       []gopacket.Packet
+	TransportFlow gopacket.Flow
+	XLayerFlow		CrossLayerFlow
 	SrcHost   string
 	DstHost   string
 	SrcPort   string
@@ -20,7 +21,7 @@ type TCPStream struct {
 	HasFIN 	  bool
 }
 
-func (stream TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
+func (stream *TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 
 	// GET IP AND TCP LAYERS
 	tcpLayer := packet.TransportLayer().(*layers.TCP)
@@ -33,12 +34,13 @@ func (stream TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 	//fmt.Println(stream.Length)
 	// LOOK FOR A CONNECTION SETUP SYN ONLY NOT A SYNACK
 	if stream.Length == 1 || (tcpLayer.SYN && !tcpLayer.ACK) {
-		stream.Flow = packet.TransportLayer().TransportFlow()
+		stream.TransportFlow = packet.TransportLayer().TransportFlow()
 		stream.SrcHost = ipLayer.SrcIP.String()
 		stream.DstHost = ipLayer.DstIP.String()
 		stream.SrcPort = tcpLayer.SrcPort.String()
 		stream.DstPort = tcpLayer.DstPort.String()
 		stream.HasSYN = tcpLayer.SYN
+		stream.XLayerFlow = *NewCrossLayerFlow(stream.SrcHost, stream.SrcPort, stream.DstHost, stream.DstPort)
 	}
 
 	// CHECK FOR ACK
@@ -61,7 +63,7 @@ func (stream TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 		stream.HasFIN = true
 	}
 
-	return &stream
+	return stream
 
 }
 
@@ -81,4 +83,30 @@ func NewTCPStream() *TCPStream {
 		HasACK: false,
 		HasFIN: false,
 	}
+}
+
+// OwnsPacket DETERMINES IF A CROSS LAYER FLOW OWNS A PACKET - ALLOWING FOR BIDIRECTIONAL STREAM REASSEMBLY
+func (stream *TCPStream) OwnsPacket(p gopacket.Packet) bool {
+
+	// GET THE STREAM'S CROSS LAYER FLOW
+	clf := stream.XLayerFlow
+
+	// GET LAYERS
+	tcpLayer := p.TransportLayer().(*layers.TCP)
+	ipLayer := p.NetworkLayer().(*layers.IPv4)
+
+	// IF THE PACKET'S SOURCE AND DEST IP ADDRESSES BELONG IN THE FLOW
+	sPort, dPort := tcpLayer.SrcPort.String(), tcpLayer.DstPort.String()
+	sAddr, dAddr := ipLayer.SrcIP.String(), ipLayer.DstIP.String()
+
+	// ENSURE NETWORK LAYER MATCHES
+	if (clf.SrcHost == sAddr && clf.DstHost == dAddr) || (clf.SrcHost == dAddr && clf.DstHost == sAddr) {
+
+		// NETWORK LAYER MATCHES. CHECK TRANSPORT LAYERS
+		if (clf.SrcPort == sPort && clf.DstPort == dPort) || (clf.SrcPort == dPort && clf.DstPort == sPort) {
+			return true
+		}
+	}
+
+	return false
 }
