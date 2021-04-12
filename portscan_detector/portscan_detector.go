@@ -7,9 +7,10 @@ import (
 	. "github.com/k-mistele/pcap_portscan_detector/set"
 )
 
-const reasonableDifferentPortThreshhold = 10
-const lowestEphemeralPort = 32768 // IANA SUGGESTS 49152, BUT LOTS OF LINUX KERNELS USE 32768
-
+// reasonableDifferentPortThreshold DEFINES THE GREATEST NUMBER OF DIFFERENT TCP PORTS A HOST MIGHT REASONABLE
+// CONNECT TO WITHOUT BEING CONSIDERED MALICIOUS. THIS IS PROBABLY HIGHBALLING IT THOUGH TBH - MAYBE 80, 443, 22, 21, 139, 445
+// IF THE COMPUTER IS BEING USED BY A SUPER USER
+const reasonableDifferentPortThreshold = 10
 
 // buildTransportStreams BUILDS A LIST OF BIDIRECTIONAL TRANSPORT STREAMS
 func buildTransportStreams (packetSource *gopacket.PacketSource) (*[]*TCPStream, error) {
@@ -103,7 +104,7 @@ func identifyPortScans(sourceHostToStreams *map[string] []*TCPStream) (*[]string
 			portNumbers.Add(stream.DstPort)
 		}
 
-		if portNumbers.Size() >= reasonableDifferentPortThreshhold {
+		if portNumbers.Size() >= reasonableDifferentPortThreshold {
 			// IF THE SIZE IS LESS THAN 10, IT'S PROBABLY A PORT SCAN
 			attackingHosts = append(attackingHosts, srcHost)
 
