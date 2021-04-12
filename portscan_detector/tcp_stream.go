@@ -35,7 +35,9 @@ func (stream *TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 
 	// ADD THE PACKET
 	stream.Length += 1
-	stream.Packets = append(stream.Packets, packet)
+	// TODO: NOTE THAT I COMMENTED OUT THE LINE BELOW FOR EFFICIENCY  - IT'S NOT ACTUALLY NEEDED FOR THE ANALYSIS
+	// 	THAT WE'RE DOING HERE
+	//stream.Packets = append(stream.Packets, packet)
 
 	//fmt.Println(stream.Length)
 	// LOOK FOR A CONNECTION SETUP SYN ONLY NOT A SYNACK
