@@ -15,7 +15,7 @@ type TCPStream struct {
 	SrcPort   string
 	DstPort   string
 	HasSYN    bool
-	HasACK    bool
+	HasACK    bool		// NOTE THAT THIS IS A NON-SYNACK ACK
 	HasSYNACK bool
 	HasRST    bool
 	HasFIN 	  bool
@@ -43,15 +43,16 @@ func (stream *TCPStream) AddPacket(packet gopacket.Packet) *TCPStream {
 		stream.XLayerFlow = *NewCrossLayerFlow(stream.SrcHost, stream.SrcPort, stream.DstHost, stream.DstPort)
 	}
 
-	// CHECK FOR ACK
-	if tcpLayer.ACK && stream.HasACK == false {
-		stream.HasACK = true
-	}
-
 	// CHECK FOR SYNACK
 	if tcpLayer.SYN && tcpLayer.ACK && stream.HasSYNACK == false {
 		stream.HasSYNACK = true
 	}
+
+	// CHECK FOR NON-SYNACK ACK
+	if tcpLayer.ACK && !tcpLayer.SYN && stream.HasACK == false {
+		stream.HasACK = true
+	}
+
 
 	// CHECK FOR RST
 	if tcpLayer.RST && stream.HasRST == false {
